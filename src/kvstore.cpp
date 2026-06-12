@@ -21,6 +21,14 @@ static constexpr const char* TOMBSTONE = "__TOMBSTONE__";
 KVStore::KVStore(const string& filename){
         walFile=filename;
         rebuildkeydir();
+        wal.open(walFile, ios::binary | ios::app);
+        if(!wal)
+            {
+                throw runtime_error("Failed to open WAL");
+            }
+        
+        
+
     }
 
 unordered_map<string,uint64_t>& KVStore::getKeyDir() {
@@ -32,26 +40,27 @@ bool KVStore::set(const string& key, const string& value){
         
         unique_lock<shared_mutex> lock(sm);
         //this_thread::sleep_for(chrono::seconds(2));
-        ofstream out(walFile, ios::binary | ios::app);
+        
 
-        if (!out)
-            return false;
+        if (!wal){
+            cout<< "OPEN FAILED: "<< walFile<< endl;
+            return false;}
 
         uint32_t keyLen = key.size();
         uint32_t valueLen = value.size();
 
-        uint64_t offset = out.tellp();//tellp gives the position of write pointer
+        uint64_t offset = wal.tellp();//tellp gives the position of write pointer
 
         //cout << "Writing " << key<< " at offset "<< offset << endl;
 
-        out.write((char*)&keyLen, sizeof(keyLen));
-        out.write((char*)&valueLen, sizeof(valueLen));
+        wal.write((char*)&keyLen, sizeof(keyLen));
+        wal.write((char*)&valueLen, sizeof(valueLen));
 
-        out.write(&key[0], keyLen);//.WRITE IS A BINARTY function whcih dpes not undersatnd string so we give key.data which gives pointer poointing to start of the line there by write len characteds
+        wal.write(&key[0], keyLen);//.WRITE IS A BINARTY function whcih dpes not undersatnd string so we give key.data which gives pointer poointing to start of the line there by write len characteds
 
-        out.write(&value[0], valueLen);
+        wal.write(&value[0], valueLen);
 
-        out.flush();//writrs to file from buffer
+        wal.flush();//writrs to file from buffer
 
         keyDir[key] = offset; //in memory key directory
 
@@ -63,18 +72,30 @@ bool KVStore::get(const string& key, string& value){
         
         shared_lock<shared_mutex> lock(sm);
         //this_thread::sleep_for(chrono::seconds(2));
-        if(keyDir.find(key)==keyDir.end())return false;
-        uint64_t offset=keyDir[key];
+        auto it = keyDir.find(key);
 
+        if(it == keyDir.end())
+            return false;
+
+        uint64_t offset = it->second;
         ifstream in(walFile,ios::binary);
-
+        if(!in)return false;
         in.seekg(offset);
         uint32_t keylen;
         uint32_t  vallen;
 
 
-        in.read((char*)&keylen,sizeof(keylen));
-        in.read((char*)&vallen,sizeof(vallen));
+        if(!in.read((char*)&keylen,sizeof(keylen)))
+            return false;
+
+        if(!in.read((char*)&vallen,sizeof(vallen)))
+            return false;
+        
+        if(keylen > MAX_KEY_SIZE)
+            return false;
+
+        if(vallen > MAX_VAL_SIZE)
+            return false;
 
         string storedkey(keylen,'\0');
         string storedval(vallen,'\0');
@@ -163,18 +184,37 @@ void KVStore::compact(){
                         out.write(&key[0], keylen);//.WRITE IS A BINARTY function whcih dpes not undersatnd string so we give key.data which gives pointer poointing to start of the line there by write len characteds
                         out.write(&val[0], vallen);
 
-                        out.flush();//writrs to file from buffer
+                       
 
                         newkvd[key] = compactoffset; //in memory key directory
 
               }
+            out.flush();//writrs to file from buffer
 
         }
         out.close();
         in.close();
-        remove(walFile.c_str());
-        rename("compact.log", walFile.c_str());
-        keyDir=newkvd;
+        wal.close();
+
+        if(rename("compact.log", walFile.c_str()) != 0)
+            {
+                perror("rename");
+                return;
+            }
+        wal.open(walFile,ios::binary | ios::app);
+        if(!wal.is_open())
+        {
+            rebuildkeydirinternal();
+            return;
+        }
+
+        keyDir = newkvd;
         //rebuildkeydirinternal();
 
     }
+
+KVStore::~KVStore()
+{
+    if(wal.is_open())
+        wal.close();
+}
