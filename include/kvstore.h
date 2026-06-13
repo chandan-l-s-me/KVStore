@@ -9,11 +9,16 @@ using namespace std;
 class KVStore {
 private:
     string walFile;
-    unordered_map<std::string, uint64_t> keyDir;
+    unordered_map<string, uint64_t> keyDir;
     shared_mutex sm;
     ofstream wal;
     uint32_t MAX_KEY_SIZE = 1024;
     uint32_t MAX_VAL_SIZE = 1024 * 1024;
+
+    vector<string>sstables;
+    unordered_map<string,string>memTable;
+    int nextTableId=1;
+    static constexpr int FLUSH_THRESHOLD = 100;
 
 
     void rebuildkeydirinternal();
@@ -34,5 +39,15 @@ public:
     void rebuildkeydir();
 
     void compact();
+
+    void flushToSSTable();
+
+    bool searchSSTable(const string & key,string & value);
+
+    void loadSSTables();
+
+    void compactSSTables();
+
+
     ~KVStore();
 };

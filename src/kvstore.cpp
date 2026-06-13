@@ -1,4 +1,5 @@
 #include "../include/kvstore.h"
+#include "../include/sstable.h"
 #include <iostream>
 #include <fstream>
 #include <unordered_map>
@@ -10,6 +11,8 @@
 #include <thread>
 #include<atomic>
 #include<random>
+#include<filesystem>
+namespace fs = std::filesystem;
 
 
 
@@ -19,7 +22,9 @@ static constexpr const char* TOMBSTONE = "__TOMBSTONE__";
     
 
 KVStore::KVStore(const string& filename){
-        walFile=filename;
+        fs::create_directories("data");
+        walFile="data/"+filename;
+        loadSSTables();
         rebuildkeydir();
         wal.open(walFile, ios::binary | ios::app);
         if(!wal)
@@ -64,6 +69,13 @@ bool KVStore::set(const string& key, const string& value){
 
         keyDir[key] = offset; //in memory key directory
 
+        memTable[key] = value;
+
+        if(memTable.size() >= FLUSH_THRESHOLD)
+        {
+            flushToSSTable();
+        }
+
         return true;
 
     }
@@ -72,6 +84,24 @@ bool KVStore::get(const string& key, string& value){
         
         shared_lock<shared_mutex> lock(sm);
         //this_thread::sleep_for(chrono::seconds(2));
+
+
+        auto mt = memTable.find(key);
+
+        if(mt != memTable.end())
+        {
+            value = mt->second;
+
+            if(value == TOMBSTONE)
+                return false;
+
+            return true;
+        }
+
+        if(searchSSTable(key,value)) return true;
+
+
+
         auto it = keyDir.find(key);
 
         if(it == keyDir.end())
@@ -158,7 +188,7 @@ void KVStore::compact(){
        
         unique_lock<shared_mutex> lock(sm);
         unordered_map<string,uint64_t>newkvd;
-        ofstream out("compact.log",ios::binary);
+        ofstream out("data/compact.log",ios::binary);
         ifstream in(walFile,ios::binary);
         for(const auto &p:keyDir){
             
@@ -196,7 +226,7 @@ void KVStore::compact(){
         in.close();
         wal.close();
 
-        if(rename("compact.log", walFile.c_str()) != 0)
+        if(rename("data/compact.log", walFile.c_str()) != 0)
             {
                 perror("rename");
                 return;
@@ -212,6 +242,124 @@ void KVStore::compact(){
         //rebuildkeydirinternal();
 
     }
+
+void KVStore::flushToSSTable()
+{
+    string filename ="data/sstable_" +to_string(nextTableId++) +".dat";
+    SSTable::writeTable(filename,memTable);
+    sstables.push_back(filename);
+    memTable.clear();
+    if(sstables.size() >= 10)
+        {
+            compactSSTables();
+        }
+
+    
+}
+
+
+
+
+bool  KVStore::searchSSTable(const string & key,string &value){
+    for(int i = sstables.size()- 1;i >= 0;i--)
+{
+
+    if(SSTable::get(sstables[i],key,value))
+    {
+        if(value == TOMBSTONE)
+            return false;
+
+        return true;
+    }
+}
+    return false;
+}
+
+//after restart loading from sstables
+void KVStore::loadSSTables()
+{
+    sstables.clear();
+
+    int maxId = 0;
+
+    for(const auto& entry : fs::directory_iterator("data"))
+    {
+        string fullPath =
+            entry.path().string();
+
+        string filename =
+            entry.path().filename().string();
+
+        if(filename.rfind("sstable_", 0) == 0)
+        {
+            sstables.push_back(fullPath);
+
+            size_t start = 8;
+            size_t end = filename.find(".dat");
+
+            if(end != string::npos)
+            {
+                int id =stoi(filename.substr(start,end - start));
+                maxId = max(maxId, id);
+            }
+        }
+    }
+
+    sort(sstables.begin(),sstables.end(),
+        [](const string& a, const string& b)
+        {
+            auto getId =
+                [](const string& path)
+                {
+                    string filename =
+                        fs::path(path)
+                            .filename()
+                            .string();
+
+                    return stoi(
+                        filename.substr(
+                            8,
+                            filename.find(".dat") - 8
+                        )
+                    );
+                };
+
+            return getId(a) < getId(b);
+        }
+    );
+
+    nextTableId = maxId + 1;
+}
+
+
+
+
+
+
+
+void KVStore::compactSSTables()
+{
+    unordered_map<string,string> merged;
+
+    for(auto &file : sstables)
+    {
+        SSTable::loadTable(file,merged);
+    }
+
+    string newFile ="data/sstable_" +to_string(nextTableId++) +".dat";
+
+    SSTable::writeTable(newFile,merged);
+
+    for(auto &file : sstables)
+    {
+        remove(file.c_str());
+    }
+
+    sstables.clear();
+
+    sstables.push_back(newFile);
+}
+
 
 KVStore::~KVStore()
 {
