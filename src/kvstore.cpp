@@ -246,8 +246,9 @@ void KVStore::compact(){
 void KVStore::flushToSSTable()
 {
     string filename ="data/sstable_" +to_string(nextTableId++) +".dat";
-    SSTable::writeTable(filename,memTable);
-    sstables.push_back(filename);
+    auto range =SSTable::writeTable(filename,memTable);
+    sstables.push_back({filename,range.first,range.second});
+
     memTable.clear();
     if(sstables.size() >= 10)
         {
@@ -263,10 +264,15 @@ void KVStore::flushToSSTable()
 bool  KVStore::searchSSTable(const string & key,string &value){
     for(int i = sstables.size()- 1;i >= 0;i--)
 {
+    auto &table =sstables[i];
 
-    if(SSTable::get(sstables[i],key,value))
+    if(key < table.minKey)continue;
+
+    if(key > table.maxKey)continue;
+
+    if(SSTable::get(table.filename,key,value))
     {
-        if(value == TOMBSTONE)
+        if(value==TOMBSTONE)
             return false;
 
         return true;
@@ -292,7 +298,8 @@ void KVStore::loadSSTables()
 
         if(filename.rfind("sstable_", 0) == 0)
         {
-            sstables.push_back(fullPath);
+            auto range =SSTable::getMinMaxKey(fullPath);
+            sstables.push_back({fullPath,range.first,range.second});
 
             size_t start = 8;
             size_t end = filename.find(".dat");
@@ -305,28 +312,27 @@ void KVStore::loadSSTables()
         }
     }
 
-    sort(sstables.begin(),sstables.end(),
-        [](const string& a, const string& b)
-        {
-            auto getId =
-                [](const string& path)
-                {
-                    string filename =
-                        fs::path(path)
-                            .filename()
-                            .string();
+   sort(sstables.begin(),sstables.end(),[](const SSTableMeta& a,const SSTableMeta& b)
+    {
+        auto getId =
+            [](const string& path)
+            {
+                string filename =
+                    fs::path(path)
+                        .filename()
+                        .string();
 
-                    return stoi(
-                        filename.substr(
-                            8,
-                            filename.find(".dat") - 8
-                        )
-                    );
-                };
+                return stoi(
+                    filename.substr(
+                        8,
+                        filename.find(".dat") - 8
+                    )
+                );
+            };
 
-            return getId(a) < getId(b);
-        }
-    );
+        return getId(a.filename)
+             < getId(b.filename);
+    });
 
     nextTableId = maxId + 1;
 }
@@ -336,14 +342,17 @@ void KVStore::loadSSTables()
 
 
 
+//compacts many sstables into one single sstable
 
 void KVStore::compactSSTables()
 {
     unordered_map<string,string> merged;
 
     for(auto &file : sstables)
-    {
-        SSTable::loadTable(file,merged);
+    {   //loadtable reads the file and updates the map merged 
+        //new values will correctly stores in merged map and tombstone values are not added into the map itself
+        //output is new clean map
+        SSTable::loadTable(file.filename,merged);
     }
 
     string newFile ="data/sstable_" +to_string(nextTableId++) +".dat";
@@ -352,12 +361,12 @@ void KVStore::compactSSTables()
 
     for(auto &file : sstables)
     {
-        remove(file.c_str());
+        remove(file.filename.c_str());
     }
 
     sstables.clear();
-
-    sstables.push_back(newFile);
+    auto range =SSTable::getMinMaxKey(newFile);
+    sstables.push_back({newFile,range.first,range.second});
 }
 
 

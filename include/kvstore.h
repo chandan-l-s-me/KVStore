@@ -6,6 +6,13 @@
 #include <fstream>
 using namespace std;
 
+struct SSTableMeta
+{
+    string filename;
+    string minKey;
+    string maxKey;
+};
+
 class KVStore {
 private:
     string walFile;
@@ -15,7 +22,7 @@ private:
     uint32_t MAX_KEY_SIZE = 1024;
     uint32_t MAX_VAL_SIZE = 1024 * 1024;
 
-    vector<string>sstables;
+    vector<SSTableMeta>sstables;
     unordered_map<string,string>memTable;
     int nextTableId=1;
     static constexpr int FLUSH_THRESHOLD = 100;

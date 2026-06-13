@@ -7,7 +7,7 @@
 using namespace std;
 static constexpr const char* TOMBSTONE = "__TOMBSTONE__";
 
-void SSTable::writeTable(const string& filename,const unordered_map<string,string>& memTable)
+pair<string,string> SSTable::writeTable(const string& filename,const unordered_map<string,string>& memTable)
 {
     vector<pair<string,string>> data;
 
@@ -32,6 +32,10 @@ void SSTable::writeTable(const string& filename,const unordered_map<string,strin
 
         out.write(p.second.data(),valueLen);
     }
+    string minKey = data.front().first;
+    string maxKey = data.back().first;
+
+    return {minKey,maxKey};
 }
 
 bool SSTable::get(const string& filename,const string& key,string& value)
@@ -99,4 +103,45 @@ void SSTable::loadTable(const string& filename,unordered_map<string,string>& map
             map.erase(Key);
         }
     }
+}
+
+//helper function for min-max in sstable
+
+pair<string,string>SSTable::getMinMaxKey(const string& filename){
+
+    ifstream in(filename,ios::binary);
+    string minKey;
+    string maxKey;
+
+    bool first = true;
+
+    while(true)
+    {
+        uint32_t keyLen;
+        uint32_t valueLen;
+
+        if(!in.read((char*)&keyLen,sizeof(keyLen)))break;
+        
+
+        in.read((char*)&valueLen,sizeof(valueLen));
+
+        string key(keyLen,'\0');
+        string value(valueLen,'\0');
+
+        in.read(&key[0],keyLen);
+        in.read(&value[0],valueLen);
+
+        if(first)
+        {
+            minKey = key;
+            first = false;
+        }
+
+        maxKey = key;
+    }
+
+    return {
+        minKey,
+        maxKey
+    };
 }
