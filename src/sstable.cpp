@@ -16,26 +16,52 @@ void SSTable::writeTable(const string& filename,const unordered_map<string,strin
 
     sort(data.begin(),data.end());
 
-    ofstream out(filename);
+    ofstream out(filename,ios::binary);
 
     for(const auto& p : data)
     {
-        out<<p.first<<" "<< p.second<< "\n";
+        uint32_t keyLen =p.first.size();
+
+        uint32_t valueLen =p.second.size();
+
+        out.write((char*)&keyLen,sizeof(keyLen));
+
+        out.write((char*)&valueLen,sizeof(valueLen));
+
+        out.write(p.first.data(),keyLen);
+
+        out.write(p.second.data(),valueLen);
     }
 }
 
 bool SSTable::get(const string& filename,const string& key,string& value)
 {
-    ifstream in(filename);
+    ifstream in(filename,ios::binary);
 
     string k;
     string v;
 
-    while(in >> k >> v)
+    while(true)
     {
-        if(k == key)
-        {   if(v==TOMBSTONE)return false;
-            value = v;
+        uint32_t keyLen;
+        uint32_t valueLen;
+
+        if(!in.read((char*)&keyLen,sizeof(keyLen)))break;
+
+        if(!in.read((char*)&valueLen,sizeof(valueLen)))break;
+        
+
+        string storedKey(keyLen,'\0');
+
+        string storedValue(valueLen,'\0');
+
+        in.read(&storedKey[0],keyLen);
+
+        in.read(&storedValue[0],valueLen);
+
+        if(storedKey == key)
+        {
+            value = storedValue;
             return true;
         }
     }
@@ -49,15 +75,28 @@ bool SSTable::get(const string& filename,const string& key,string& value)
 //helper function
 void SSTable::loadTable(const string& filename,unordered_map<string,string>& map)
 {
-    ifstream in(filename);
-
-    string key;
-    string value;
-
-    while(in >> key >> value)
-    {
+    ifstream in(filename,ios::binary);
         
-        map[key] = value;
-        if(value==TOMBSTONE)map.erase(key);
+    while(true)
+    {
+        uint32_t keyLen;
+        uint32_t valueLen;
+
+        if(!in.read((char*)&keyLen,sizeof(keyLen)))break;
+        if(!in.read((char*)&valueLen,sizeof(valueLen)))break;
+
+        string Key(keyLen,'\0');
+
+        string Value(valueLen,'\0');
+
+        in.read(&Key[0],keyLen);
+
+        in.read(&Value[0],valueLen);
+
+        map[Key] = Value;
+        if(Value == TOMBSTONE)
+        {
+            map.erase(Key);
+        }
     }
 }
